@@ -1,0 +1,13 @@
+{
+  "name": "wujie-kf-simple",
+  "version": "1.0.0",
+  "description": "無界茶台简易客服系统",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js"
+  },
+  "dependencies": {
+    "sqlite3": "^5.1.6"
+  }
+}

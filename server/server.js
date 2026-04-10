@@ -1,31 +1,15 @@
-// 简易版客服系统 - 服务端
+// 简易版客服系统 - 服务端（内存版）
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
 
 const PORT = 3002;
 
-// 初始化 SQLite 数据库
-const db = new sqlite3.Database('./chat.db');
-
-// 创建表
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS conversations (
-    id TEXT PRIMARY KEY,
-    visitor_id TEXT NOT NULL,
-    status TEXT DEFAULT 'ai',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-  
-  db.run(`CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    conversation_id TEXT NOT NULL,
-    sender_type TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-});
+// 内存存储
+const storage = {
+  conversations: new Map(),
+  messages: []
+};
 
 // 元器配置
 const YUANQI_CONFIG = {
@@ -95,7 +79,6 @@ async function callYuanqiAI(message, userId) {
     }
     
     const data = await response.json();
-    // 解析元器响应格式
     if (data.choices && data.choices[0] && data.choices[0].message) {
       return data.choices[0].message.content;
     }
@@ -161,20 +144,18 @@ const server = http.createServer((req, res) => {
         const visitorId = data.visitorId || 'user_' + Date.now();
         const conversationId = 'conv_' + Date.now();
         
-        db.run('INSERT INTO conversations (id, visitor_id) VALUES (?, ?)', 
-          [conversationId, visitorId], (err) => {
-            if (err) {
-              res.writeHead(500, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ success: false, error: err.message }));
-              return;
-            }
-            
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              success: true,
-              conversationId: conversationId
-            }));
-          });
+        storage.conversations.set(conversationId, {
+          id: conversationId,
+          visitorId: visitorId,
+          status: 'ai',
+          createdAt: new Date()
+        });
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          conversationId: conversationId
+        }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: e.message }));
@@ -191,36 +172,33 @@ const server = http.createServer((req, res) => {
         const data = JSON.parse(body);
         const { conversationId, senderType, content } = data;
         
-        // 保存消息
-        db.run('INSERT INTO messages (conversation_id, sender_type, content) VALUES (?, ?, ?)',
-          [conversationId, senderType, content], async function(err) {
-            if (err) {
-              res.writeHead(500, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ success: false, error: err.message }));
-              return;
-            }
-            
-            // 如果是用户消息，调用 AI 回复
-            if (senderType === 'user') {
-              const aiReply = await callYuanqiAI(content, conversationId);
-              
-              // 检查是否转人工
-              if (aiReply.includes('[TRANSFER]')) {
-                // 更新会话状态为转人工
-                db.run('UPDATE conversations SET status = ? WHERE id = ?', ['transfer', conversationId]);
-                
-                const cleanReply = aiReply.replace('[TRANSFER]', '').trim();
-                db.run('INSERT INTO messages (conversation_id, sender_type, content) VALUES (?, ?, ?)',
-                  [conversationId, 'ai', cleanReply]);
-              } else {
-                db.run('INSERT INTO messages (conversation_id, sender_type, content) VALUES (?, ?, ?)',
-                  [conversationId, 'ai', aiReply]);
-              }
-            }
-            
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, messageId: this.lastID }));
-          });
+        const messageId = storage.messages.length + 1;
+        const message = {
+          id: messageId,
+          conversationId,
+          senderType,
+          content,
+          createdAt: new Date()
+        };
+        storage.messages.push(message);
+        
+        // 如果是用户消息，调用 AI 回复
+        if (senderType === 'user') {
+          const aiReply = await callYuanqiAI(content, conversationId);
+          
+          const aiMessageId = storage.messages.length + 1;
+          const aiMessage = {
+            id: aiMessageId,
+            conversationId,
+            senderType: 'ai',
+            content: aiReply,
+            createdAt: new Date()
+          };
+          storage.messages.push(aiMessage);
+        }
+        
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, messageId }));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: false, error: e.message }));
@@ -231,18 +209,10 @@ const server = http.createServer((req, res) => {
 
   if (url.startsWith('/api/messages/') && method === 'GET') {
     const conversationId = url.split('/')[3];
+    const messages = storage.messages.filter(m => m.conversationId === conversationId);
     
-    db.all('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC',
-      [conversationId], (err, rows) => {
-        if (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, error: err.message }));
-          return;
-        }
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, messages: rows }));
-      });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, messages }));
     return;
   }
 

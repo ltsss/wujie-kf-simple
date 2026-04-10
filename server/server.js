@@ -27,9 +27,12 @@ db.serialize(() => {
   )`);
 });
 
-// Dify 配置
-const DIFY_API_KEY = 'app-2wNgRmooOPx0GZevdxwKMYor';
-const DIFY_API_URL = 'https://api.dify.ai/v1/chat-messages';
+// 元器配置
+const YUANQI_CONFIG = {
+  apiUrl: 'https://yuanqi.tencent.com/openapi/v1/agent/chat/completions',
+  appId: '2039767576540908736',
+  appKey: 'gYksTp9ipJQisQ2OXwWkneF5Dq74p6ds'
+};
 
 // 简单的 fetch
 const https = require('https');
@@ -59,30 +62,46 @@ function fetch(url, options = {}) {
   });
 }
 
-// 调用 Dify AI
-async function callDifyAI(message, userId) {
+// 调用元器 AI
+async function callYuanqiAI(message, userId) {
   try {
-    const response = await fetch(`${DIFY_API_URL}/chat-messages`, {
+    const response = await fetch(YUANQI_CONFIG.apiUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${DIFY_API_KEY}`,
+        'Authorization': `Bearer ${YUANQI_CONFIG.appKey}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        inputs: {},
-        query: message,
-        response_mode: 'blocking',
-        conversation_id: '',
-        user: userId
+        assistant_id: YUANQI_CONFIG.appId,
+        user_id: userId,
+        stream: false,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: message
+              }
+            ]
+          }
+        ]
       })
     });
 
-    if (!response.ok) throw new Error('Dify API error');
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`元器 API error: ${errorText}`);
+    }
     
     const data = await response.json();
-    return data.answer;
+    // 解析元器响应格式
+    if (data.choices && data.choices[0] && data.choices[0].message) {
+      return data.choices[0].message.content;
+    }
+    return '抱歉，我暂时无法回答，请稍后再试。';
   } catch (error) {
-    console.error('Dify 调用失败:', error.message);
+    console.error('元器调用失败:', error.message);
     return '抱歉，我暂时无法回答，请稍后再试。';
   }
 }
@@ -183,7 +202,7 @@ const server = http.createServer((req, res) => {
             
             // 如果是用户消息，调用 AI 回复
             if (senderType === 'user') {
-              const aiReply = await callDifyAI(content, conversationId);
+              const aiReply = await callYuanqiAI(content, conversationId);
               
               // 检查是否转人工
               if (aiReply.includes('[TRANSFER]')) {
